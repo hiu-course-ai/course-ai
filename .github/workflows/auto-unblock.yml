@@ -15,10 +15,12 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const currentIssueNumber = context.payload.issue.number;
+            const closedIssueNumber = context.payload.issue.number;
             const isClosed = context.payload.action === 'closed';
 
-            // 1. リポジトリ内の全 Issue を取得して依存関係（本文内の #XX）を解析
+            console.log(`Triggered by Issue #${closedIssueNumber} (${context.payload.action})`);
+
+            // 全 Issue を取得
             const issues = await github.paginate(github.rest.issues.listForRepo, {
               owner,
               repo,
@@ -26,18 +28,20 @@ jobs:
             });
 
             for (const issue of issues) {
-              if (issue.number === currentIssueNumber || !issue.body) continue;
+              if (issue.number === closedIssueNumber || !issue.body) continue;
 
-              // 本文から "前提タスク: #XX" または "#XX" を抽出
+              // 本文から #数字 の参照をすべて抽出
               const matches = issue.body.match(/#(\d+)/g);
               if (!matches) continue;
 
-              const parentNumbers = matches.map(m => parseInt(m.replace('#', '')));
-              if (!parentNumbers.includes(currentIssueNumber)) continue;
+              const referencedNumbers = matches.map(m => parseInt(m.replace('#', '')));
+              if (!referencedNumbers.includes(closedIssueNumber)) continue;
 
-              // 依存関係にある他の前提タスクのステータスを確認
+              console.log(`Found dependent Issue #${issue.number}`);
+
+              // 依存先がすべて Closed か確認
               let allParentsClosed = true;
-              for (const parentNum of parentNumbers) {
+              for (const parentNum of referencedNumbers) {
                 const parentIssue = issues.find(i => i.number === parentNum);
                 if (parentIssue && parentIssue.state !== 'closed') {
                   allParentsClosed = false;
@@ -45,10 +49,10 @@ jobs:
                 }
               }
 
-              // 2. GraphQL API で Project V2 の Item ID と Status Field を取得・更新
+              // GraphQL で Project Item 情報を取得
               const query = `
-                query($issueUrl: URI!) {
-                  resource(url: $issueUrl) {
+                query($url: URI!) {
+                  resource(url: $url) {
                     ... on Issue {
                       projectItems(first: 5) {
                         nodes {
@@ -72,39 +76,41 @@ jobs:
                 }
               `;
 
-              const result = await github.graphql(query, { issueUrl: issue.html_url });
-              const projectItem = result.resource?.projectItems?.nodes[0];
+              const res = await github.graphql(query, { url: issue.html_url });
+              const projectItem = res.resource?.projectItems?.nodes[0];
 
-              if (projectItem) {
-                const statusField = projectItem.project.fields.nodes.find(f => f.name === 'Status');
-                if (statusField) {
-                  // 前提が全消化されたら 'Todo'、未完了に戻ったら 'Blocked' に切り替え
-                  const targetStatusName = (isClosed && allParentsClosed) ? 'Todo' : 'Blocked';
-                  const targetOption = statusField.options.find(o => o.name.toLowerCase() === targetStatusName.toLowerCase());
+              if (!projectItem) {
+                console.log(`Issue #${issue.number} is not in any Project Board.`);
+                continue;
+              }
 
-                  if (targetOption) {
-                    const mutation = `
-                      mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                        updateProjectV2ItemFieldValue(
-                          input: {
-                            projectId: $projectId
-                            itemId: $itemId
-                            fieldId: $fieldId
-                            value: { singleSelectOptionId: $optionId }
-                          }
-                        ) { projectV2Item { id } }
+              const statusField = projectItem.project.fields.nodes.find(f => f.name === 'Status');
+              if (!statusField) continue;
+
+              const targetStatus = (isClosed && allParentsClosed) ? 'Todo' : 'Blocked';
+              const targetOption = statusField.options.find(o => o.name.toLowerCase() === targetStatus.toLowerCase());
+
+              if (targetOption) {
+                const mutation = `
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                    updateProjectV2ItemFieldValue(
+                      input: {
+                        projectId: $projectId
+                        itemId: $itemId
+                        fieldId: $fieldId
+                        value: { singleSelectOptionId: $optionId }
                       }
-                    `;
-
-                    await github.graphql(mutation, {
-                      projectId: projectItem.project.id,
-                      itemId: projectItem.id,
-                      fieldId: statusField.id,
-                      optionId: targetOption.id
-                    });
-
-                    console.log(`Issue #${issue.number} moved to ${targetStatusName}`);
+                    ) { projectV2Item { id } }
                   }
-                }
+                `;
+
+                await github.graphql(mutation, {
+                  projectId: projectItem.project.id,
+                  itemId: projectItem.id,
+                  fieldId: statusField.id,
+                  optionId: targetOption.id
+                });
+
+                console.log(`SUCCESS: Moved Issue #${issue.number} to ${targetStatus}`);
               }
             }
