@@ -20,7 +20,7 @@ jobs:
 
             console.log(`Triggered by Issue #${closedIssueNumber} (${context.payload.action})`);
 
-            // 全 Issue を取得
+            // 1. 全 Issue を取得
             const issues = await github.paginate(github.rest.issues.listForRepo, {
               owner,
               repo,
@@ -30,14 +30,14 @@ jobs:
             for (const issue of issues) {
               if (issue.number === closedIssueNumber || !issue.body) continue;
 
-              // 本文から #数字 の参照をすべて抽出
+              // 本文から #数字 の参照を抽出
               const matches = issue.body.match(/#(\d+)/g);
               if (!matches) continue;
 
               const referencedNumbers = matches.map(m => parseInt(m.replace('#', '')));
               if (!referencedNumbers.includes(closedIssueNumber)) continue;
 
-              console.log(`Found dependent Issue #${issue.number}`);
+              console.log(`Target Dependent Issue Found: #${issue.number}`);
 
               // 依存先がすべて Closed か確認
               let allParentsClosed = true;
@@ -49,12 +49,12 @@ jobs:
                 }
               }
 
-              // GraphQL で Project Item 情報を取得
+              // 2. Node ID 経由で ProjectV2Item を強力に取得する GraphQL
               const query = `
-                query($url: URI!) {
-                  resource(url: $url) {
+                query($issueNodeId: ID!) {
+                  node(id: $issueNodeId) {
                     ... on Issue {
-                      projectItems(first: 5) {
+                      projectItems(first: 10) {
                         nodes {
                           id
                           project {
@@ -76,41 +76,47 @@ jobs:
                 }
               `;
 
-              const res = await github.graphql(query, { url: issue.html_url });
-              const projectItem = res.resource?.projectItems?.nodes[0];
+              const res = await github.graphql(query, { issueNodeId: issue.node_id });
+              const projectItems = res.node?.projectItems?.nodes || [];
 
-              if (!projectItem) {
-                console.log(`Issue #${issue.number} is not in any Project Board.`);
+              if (projectItems.length === 0) {
+                console.log(`⚠️ Issue #${issue.number} is not linked to any Project Item.`);
                 continue;
               }
 
-              const statusField = projectItem.project.fields.nodes.find(f => f.name === 'Status');
-              if (!statusField) continue;
+              for (const item of projectItems) {
+                const statusField = item.project.fields.nodes.find(f => f.name === 'Status');
+                if (!statusField) continue;
 
-              const targetStatus = (isClosed && allParentsClosed) ? 'Todo' : 'Blocked';
-              const targetOption = statusField.options.find(o => o.name.toLowerCase() === targetStatus.toLowerCase());
+                const targetStatus = (isClosed && allParentsClosed) ? 'Todo' : 'Blocked';
+                const targetOption = statusField.options.find(o => o.name.toLowerCase() === targetStatus.toLowerCase());
 
-              if (targetOption) {
-                const mutation = `
-                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                    updateProjectV2ItemFieldValue(
-                      input: {
-                        projectId: $projectId
-                        itemId: $itemId
-                        fieldId: $fieldId
-                        value: { singleSelectOptionId: $optionId }
+                if (targetOption) {
+                  const mutation = `
+                    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                      updateProjectV2ItemFieldValue(
+                        input: {
+                          projectId: $projectId
+                          itemId: $itemId
+                          fieldId: $fieldId
+                          value: { singleSelectOptionId: $optionId }
+                        }
+                      ) {
+                        projectV2Item { id }
                       }
-                    ) { projectV2Item { id } }
-                  }
-                `;
+                    }
+                  `;
 
-                await github.graphql(mutation, {
-                  projectId: projectItem.project.id,
-                  itemId: projectItem.id,
-                  fieldId: statusField.id,
-                  optionId: targetOption.id
-                });
+                  await github.graphql(mutation, {
+                    projectId: item.project.id,
+                    itemId: item.id,
+                    fieldId: statusField.id,
+                    optionId: targetOption.id
+                  });
 
-                console.log(`SUCCESS: Moved Issue #${issue.number} to ${targetStatus}`);
+                  console.log(`✅ SUCCESS: Moved Issue #${issue.number} to '${targetStatus}'`);
+                } else {
+                  console.log(`❌ Target Status Option '${targetStatus}' not found in Project.`);
+                }
               }
             }
