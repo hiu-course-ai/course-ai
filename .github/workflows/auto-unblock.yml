@@ -1,0 +1,110 @@
+name: Auto Move Blocked to Todo
+
+on:
+  issues:
+    types: [closed, reopened]
+
+jobs:
+  unblock-tasks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process Dependent Issues
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentIssueNumber = context.payload.issue.number;
+            const isClosed = context.payload.action === 'closed';
+
+            // 1. リポジトリ内の全 Issue を取得して依存関係（本文内の #XX）を解析
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'all'
+            });
+
+            for (const issue of issues) {
+              if (issue.number === currentIssueNumber || !issue.body) continue;
+
+              // 本文から "前提タスク: #XX" または "#XX" を抽出
+              const matches = issue.body.match(/#(\d+)/g);
+              if (!matches) continue;
+
+              const parentNumbers = matches.map(m => parseInt(m.replace('#', '')));
+              if (!parentNumbers.includes(currentIssueNumber)) continue;
+
+              // 依存関係にある他の前提タスクのステータスを確認
+              let allParentsClosed = true;
+              for (const parentNum of parentNumbers) {
+                const parentIssue = issues.find(i => i.number === parentNum);
+                if (parentIssue && parentIssue.state !== 'closed') {
+                  allParentsClosed = false;
+                  break;
+                }
+              }
+
+              // 2. GraphQL API で Project V2 の Item ID と Status Field を取得・更新
+              const query = `
+                query($issueUrl: URI!) {
+                  resource(url: $issueUrl) {
+                    ... on Issue {
+                      projectItems(first: 5) {
+                        nodes {
+                          id
+                          project {
+                            id
+                            fields(first: 20) {
+                              nodes {
+                                ... on ProjectV2SingleSelectField {
+                                  id
+                                  name
+                                  options { id name }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+
+              const result = await github.graphql(query, { issueUrl: issue.html_url });
+              const projectItem = result.resource?.projectItems?.nodes[0];
+
+              if (projectItem) {
+                const statusField = projectItem.project.fields.nodes.find(f => f.name === 'Status');
+                if (statusField) {
+                  // 前提が全消化されたら 'Todo'、未完了に戻ったら 'Blocked' に切り替え
+                  const targetStatusName = (isClosed && allParentsClosed) ? 'Todo' : 'Blocked';
+                  const targetOption = statusField.options.find(o => o.name.toLowerCase() === targetStatusName.toLowerCase());
+
+                  if (targetOption) {
+                    const mutation = `
+                      mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                        updateProjectV2ItemFieldValue(
+                          input: {
+                            projectId: $projectId
+                            itemId: $itemId
+                            fieldId: $fieldId
+                            value: { singleSelectOptionId: $optionId }
+                          }
+                        ) { projectV2Item { id } }
+                      }
+                    `;
+
+                    await github.graphql(mutation, {
+                      projectId: projectItem.project.id,
+                      itemId: projectItem.id,
+                      fieldId: statusField.id,
+                      optionId: targetOption.id
+                    });
+
+                    console.log(`Issue #${issue.number} moved to ${targetStatusName}`);
+                  }
+                }
+              }
+            }
