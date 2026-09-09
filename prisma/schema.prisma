@@ -1,15 +1,262 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// 1. 学科マスター (新設・募集停止・廃止の管理)
+// ==========================================
+model Department {
+  id               String           @id @default(uuid())
+  code             String           @unique // 学科コード (例: "CS", "AI_2027")
+  name             String           // 学科名 (例: "知能情報工学科")
+  facultyName      String           // 所属学部名 (例: "情報理工学部")
+  
+  status           DepartmentStatus @default(ACTIVE) // 運用ステータス
+  establishedYear  Int              // 開設年度 (例: 2027)
+  discontinuedYear Int?             // 募集停止年度 (例: 2027)
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  // リレーション
+  users                  User[]
+  courses                Course[]
+  graduationRequirements GraduationRequirement[]
+
+  @@map("departments")
+}
+
+// ==========================================
+// 2. 学生基本情報
+// ==========================================
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  year            Int      // 現在の年次 (1〜4)
+  
+  // 学科マスターとのリレーション
+  departmentId    String
+  department      Department @relation(fields: [departmentId], references: [id])
+
+  enrollmentYear  Int      // 入学年度
+
+  // AI提案利用制限
+  aiUsageCount    Int      @default(0)
+  lastResetAt     DateTime @default(now())
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // リレーション
+  interest        UserInterest?
+  preference      UserPreference?
+  courseHistories UserCourseHistory[]
+  timetables      Timetable[]
+
+  @@map("users")
+}
+
+// ==========================================
+// 3. 興味・関心 (ユーザー拡張)
+// ==========================================
+model UserInterest {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  themes           String[] // 学びたいテーマ・分野 (配列)
+  freeDescription  String?  @db.Text // 自由記述
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("user_interests")
+}
+
+// ==========================================
+// 4. 履修希望条件 (ユーザー拡張)
+// ==========================================
+model UserPreference {
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  preferredDaysTimes   String[] // 希望する曜日・時間帯 (例: ["MON_1", "WED_2"])
+  avoidedDaysTimes     String[] // 避けたい曜日・時間帯 (例: ["FRI_5"])
+  evaluationPreference String?  // 評価方法などの希望条件 (例: レポート重視)
+  otherNotes           String?  @db.Text // その他希望
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@map("user_preferences")
+}
+
+// ==========================================
+// 5. 科目マスター (全開講科目データ)
+// ==========================================
+model Course {
+  id                     String            @id @default(uuid())
+  code                   String            @unique // 科目コード
+  title                  String            // 科目名
+  credits                Int               // 単位数
+  
+  // 科目カテゴリ & 必修区分
+  category               CourseCategory    // 教養 / 専門 / 自由科目 など
+  requirementType        RequirementType   // 必修 / 選択必修 / 自由選択
+  countsTowardGraduation Boolean           @default(true) // 卒業要件単位に含めるか (教職等の自由科目は false)
+
+  // 対象学科 (特定学科の専門科目の場合。共通教養等は null)
+  departmentId           String?
+  department             Department?       @relation(fields: [departmentId], references: [id])
+
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  // リレーション
+  histories              UserCourseHistory[]
+  timetableItems         TimetableItem[]
+
+  @@map("courses")
+}
+
+// ==========================================
+// 6. 卒業要件マスター (学科・入学年度ごとの条件)
+// ==========================================
+model GraduationRequirement {
+  id                   String     @id @default(uuid())
+  
+  departmentId         String
+  department           Department @relation(fields: [departmentId], references: [id])
+
+  enrollmentYear       Int        // 入学年度 (世代ごとのカリキュラム改定に対応)
+
+  minLiberalArtsCredits Int      // x: 教養教育科目の最小必要単位数
+  minSpecializedCredits Int      // y: 専門教育科目の最小必要単位数
+  minTotalCredits       Int      // z: 卒業に必要な合計必要単位数 (x + y < z)
+
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  @@unique([departmentId, enrollmentYear])
+  @@map("graduation_requirements")
+}
+
+// ==========================================
+// 7. 履修履歴
+// ==========================================
+model UserCourseHistory {
+  id           String       @id @default(uuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  courseId     String
+  course       Course       @relation(fields: [courseId], references: [id])
+
+  year         Int          // 履修年度 (例: 2025)
+  semester     Semester     // 学期
+  status       CourseStatus // 履修状況 (COMPLETED, FAILED など)
+  earnedCredits Int         // 修得単位数
+
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([userId, courseId, year, semester])
+  @@map("user_course_histories")
+}
+
+// ==========================================
+// 8. 履修計画・時間割 (最大3パターン保存)
+// ==========================================
+model Timetable {
+  id           String          @id @default(uuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title        String          // 時間割タイトル (例: 「秋学期・単位重視プラン」)
+  year         Int             // 対象年度
+  semester     Semester        // 対象学期
+  totalCredits Int             @default(0) // 合計単位数
+
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  items        TimetableItem[]
+
+  @@map("timetables")
+}
+
+// 時間割に組み込まれた個々のコマ
+model TimetableItem {
+  id          String    @id @default(uuid())
+  timetableId String
+  timetable   Timetable @relation(fields: [timetableId], references: [id], onDelete: Cascade)
+
+  courseId    String
+  course      Course    @relation(fields: [courseId], references: [id])
+
+  dayOfWeek   DayOfWeek // 曜日 (MON, TUE...)
+  period      Int       // 時限 (1〜6)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([timetableId, dayOfWeek, period]) // 同じ時間割内で同じコマの重複を防止
+  @@map("timetable_items")
+}
+
+// ==========================================
+// Enum (列挙型) 定義
+// ==========================================
+
+// 学科ステータス
+enum DepartmentStatus {
+  ACTIVE       // 募集中・通常運用
+  DISCONTINUED // 募集停止 (新規受け入れ停止・在校生のみ参照)
+  ARCHIVED     // 完全廃止 (全学生卒業・手動設定)
+}
+
+// 科目の大枠カテゴリ
+enum CourseCategory {
+  LIBERAL_ARTS // 教養教育科目
+  SPECIALIZED   // 専門教育科目
+  FREE_ELECTIVE // 自由科目 (教職・各種プログラム等)
+  OTHER        // その他
+}
+
+// 単位の要件種別
+enum RequirementType {
+  REQUIRED           // 必修
+  SELECTIVE_REQUIRED  // 選択必修
+  ELECTIVE           // 選択
+}
+
+// 学期
+enum Semester {
+  SPRING
+  FALL
+  FULL_YEAR // 通年
+  OTHER
+}
+
+// 履修状態
+enum CourseStatus {
+  COMPLETED   // 修得済み
+  FAILED      // 未修得・落単
+  IN_PROGRESS // 履修中
+}
+
+// 曜日
+enum DayOfWeek {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+  SAT
 }
