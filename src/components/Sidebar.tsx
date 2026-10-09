@@ -64,7 +64,7 @@ export function Sidebar() {
         </span>
 
         <span className="text-lg font-bold tracking-tight text-sidebar-foreground">
-          Kurikuru
+          HIU Course AI
         </span>
       </Link>
 
