@@ -1,3 +1,4 @@
+
 'use client'
 
 import Link from 'next/link'
@@ -5,7 +6,7 @@ import { usePathname } from 'next/navigation'
 
 import {
   Home,
-  Sparkles,
+  MessageCircle,
   BookCheck,
   CalendarDays,
   Settings,
@@ -19,9 +20,10 @@ const NAV = [
     icon: Home,
   },
   {
+    // AI履修提案からAI履修相談に変更
     href: '/ai-suggest',
-    label: 'AI履修提案',
-    icon: Sparkles,
+    label: 'AI履修相談',
+    icon: MessageCircle,
   },
   {
     href: '/courses',
@@ -84,10 +86,7 @@ export function Sidebar() {
               }
             >
               <item.icon className="size-[18px]" />
-
-              <span>
-                {item.label}
-              </span>
+              <span>{item.label}</span>
             </Link>
           )
         })}
