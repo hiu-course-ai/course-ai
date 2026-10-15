@@ -20,6 +20,7 @@ const NAV = [
     icon: Home,
   },
   {
+
     // AI履修提案からAI履修相談に変更
     href: '/ai-suggest',
     label: 'AI履修相談',
