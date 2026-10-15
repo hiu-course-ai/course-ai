@@ -9,7 +9,7 @@ export default function Home() {
         </h1>
 
         <p className="mt-2 text-muted-foreground">
-          Kurikuruへようこそ。
+          HIU Course AIへようこそ。
         </p>
       </div>
 

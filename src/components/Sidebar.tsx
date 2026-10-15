@@ -19,7 +19,7 @@ const NAV = [
     icon: Home,
   },
   {
-    href: '/ai-suggest',
+    href: '/chat',
     label: 'AI履修提案',
     icon: Sparkles,
   },
@@ -64,7 +64,7 @@ export function Sidebar() {
         </span>
 
         <span className="text-lg font-bold tracking-tight text-sidebar-foreground">
-          Kurikuru
+          HIU Course AI
         </span>
       </Link>
 
