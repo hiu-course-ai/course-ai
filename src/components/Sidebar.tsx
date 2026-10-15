@@ -19,7 +19,7 @@ const NAV = [
     icon: Home,
   },
   {
-    href: '/ai-suggest',
+    href: '/chat',
     label: 'AI履修提案',
     icon: Sparkles,
   },
