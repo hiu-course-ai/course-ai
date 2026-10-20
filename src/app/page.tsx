@@ -36,15 +36,6 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-6">
-          <h2 className="font-semibold">
-            時間割
-          </h2>
-
-          <p className="mt-2 text-sm text-muted-foreground">
-            現在の時間割を確認できます。
-          </p>
-        </div>
 
       </div>
 
