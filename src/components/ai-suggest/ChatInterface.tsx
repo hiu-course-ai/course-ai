@@ -1,4 +1,3 @@
-
 'use client'
 
 import {
@@ -18,12 +17,9 @@ import {
   ExternalLink,
   X,
   GraduationCap,
+  Sliders,
 } from 'lucide-react'
 
-// ========================================
-// テスト用授業データ
-// 実際のシラバス情報に置き換えてください
-// ========================================
 type Course = {
   id: string
   name: string
@@ -39,6 +35,7 @@ type Course = {
   textbook: boolean
   syllabusUrl: string
   reason: string
+  similarity?: number // ベクトル類似度 (デバッグ用)
 }
 
 type Message = {
@@ -48,54 +45,7 @@ type Message = {
   courses?: Course[]
 }
 
-// モックデータ：画面動作確認用
-const MOCK_COURSES: Course[] = [
-  {
-    id: 'DEMO-001',
-    name: 'プログラミング基礎（サンプル）',
-    teacher: '山田 太郎（サンプル）',
-    laboratory: '情報システム研究室（サンプル）',
-    courseType: '専門',
-    requirement: '必修',
-    credits: 2,
-    year: 1,
-    openingYear: 2026,
-    semester: '前期',
-    evaluation: [
-      { name: '試験', percentage: 60 },
-      { name: '課題', percentage: 40 },
-    ],
-    textbook: true,
-    syllabusUrl: 'https://www.example.com',
-    reason:
-      'プログラミングの基本的な考え方を学べるためです。情報分野の専門科目を学ぶ際の基礎として役立つことが期待できます。',
-  },
-]
-
-// モックAI回答：実際のAI APIには未接続
-function createMockReply(
-  text: string,
-  faculty: string,
-  department: string,
-) {
-  if (!faculty || !department) {
-    return {
-      content:
-        '相談ありがとうございます。回答をより適切にするため、学部と学科を選択してください。',
-      courses: [],
-    }
-  }
-
-  return {
-    content:
-      `「${text}」について、${faculty}・${department}の学生向けに授業を提案します。以下は動作確認用のサンプル授業です。`,
-    courses: MOCK_COURSES,
-  }
-}
-
-// ========================================
 // 授業情報カード
-// ========================================
 function CourseCard({
   course,
   onShowReason,
@@ -114,6 +64,11 @@ function CourseCard({
         <div className="mb-2 flex items-center gap-2 text-sm text-blue-700">
           <BookOpen size={17} />
           <span>おすすめの授業</span>
+          {course.similarity !== undefined && (
+            <span className="rounded-md bg-blue-200/60 px-2 py-0.5 text-xs font-semibold text-blue-800">
+              類似度: {(course.similarity * 100).toFixed(1)}%
+            </span>
+          )}
           <span className="ml-auto rounded-full bg-white px-2 py-1 text-xs">
             {course.id}
           </span>
@@ -209,30 +164,33 @@ function CourseCard({
             おすすめの理由を見る
           </button>
 
-          <a
-            href={course.syllabusUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium transition hover:bg-gray-50"
-          >
-            シラバスを見る
-            <ExternalLink size={14} />
-          </a>
+          {course.syllabusUrl && (
+            <a
+              href={course.syllabusUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium transition hover:bg-gray-50"
+            >
+              シラバスを見る
+              <ExternalLink size={14} />
+            </a>
+          )}
         </div>
       </div>
     </div>
   )
 }
 
-// ========================================
 // チャット画面
-// ========================================
 export function ChatInterface() {
   const [faculty, setFaculty] = useState('')
   const [department, setDepartment] = useState('')
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [reasonCourse, setReasonCourse] = useState<Course | null>(null)
+
+  // デバッグ用: API 取得モードの切り替えステート ('direct' | 'recommend')
+  const [fetchMode, setFetchMode] = useState<'direct' | 'recommend'>('recommend')
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -250,8 +208,6 @@ export function ChatInterface() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  // 学部・学科の候補：テスト用
-  // 実際の大学の正式な情報に合わせて修正してください
   const departments: Record<string, string[]> = {
     経営情報学部: ['先端経営学科', 'システム情報学科'],
     情報メディア学部: ['情報メディア学科'],
@@ -274,29 +230,49 @@ export function ChatInterface() {
     setLoading(true)
 
     try {
-      // API Route から DB の科目データを取得
-      const res = await fetch('/api/courses')
-      const data = await res.json()
+      let fetchedCourses: Course[] = []
+      let contentText = ''
 
-      if (!res.ok) {
-        throw new Error(data.error || 'データ取得に失敗しました')
+      if (fetchMode === 'direct') {
+        // Mode A: DBから全件(5件)直接取得
+        const res = await fetch('/api/courses')
+        if (!res.ok) throw new Error('DB直接取得に失敗しました')
+        const data = await res.json()
+        fetchedCourses = data.courses || []
+        contentText = `[デバッグ: DB直接取得] 登録されている科目（${fetchedCourses.length}件）を表示します。`
+      } else {
+        // Mode B: recommend API 経由での pgvector ベクトル検索取得
+        const res = await fetch('/api/recommend', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ queryText: text }),
+        })
+
+        if (!res.ok) throw new Error('ベクトル検索に失敗しました')
+        const data = await res.json()
+        fetchedCourses = data.courses || []
+        contentText = `「${text}」との関連度が高い上位 ${fetchedCourses.length} 件の科目を検索・抽出しました。`
+      }
+
+      if (!faculty || !department) {
+        contentText += '\n※ より確実な推薦を行うため、上部で学部・学科も選択してください。'
       }
 
       const assistantMessage: Message = {
         id: nextId.current++,
         role: 'assistant',
-        content: `${faculty}・${department}の登録科目（データベースより取得）を表示します。`,
-        courses: data.courses,
+        content: contentText,
+        courses: fetchedCourses,
       }
 
       setMessages((prev) => [...prev, assistantMessage])
-    } catch (error) {
+    } catch (err: any) {
       setMessages((prev) => [
         ...prev,
         {
           id: nextId.current++,
           role: 'assistant',
-          content: '科目データの取得中にエラーが発生しました。もう一度お試しください。',
+          content: `エラーが発生しました: ${err.message || '取得に失敗しました。'}`,
         },
       ])
     } finally {
@@ -339,7 +315,7 @@ export function ChatInterface() {
 
             <div>
               <h1 className="text-lg font-bold text-gray-900">
-                AI履修相談
+                AI履修相談 (HIU Course AI)
               </h1>
               <p className="text-xs text-gray-500">
                 自分に合った授業を探しましょう
@@ -405,9 +381,45 @@ export function ChatInterface() {
           </label>
         </div>
 
-        <p className="mx-auto mt-2 max-w-5xl text-xs text-amber-700">
-          ※ 学部・学科と授業情報は動作確認用のサンプルです。
-        </p>
+        {/* デバッグ用：取得APIモード切り替えスイッチ */}
+        <div className="mx-auto mt-4 max-w-5xl rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+          <div className="flex items-center gap-2 text-xs font-semibold text-amber-800">
+            <Sliders size={14} />
+            <span>【デバッグ用】データ取得 API 切り替え</span>
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-4 text-xs">
+            <label className="flex items-center gap-1.5 cursor-pointer text-gray-700">
+              <input
+                type="radio"
+                name="fetchMode"
+                value="recommend"
+                checked={fetchMode === 'recommend'}
+                onChange={() => setFetchMode('recommend')}
+                className="text-blue-600 focus:ring-blue-500"
+              />
+              <span className="font-medium">
+                ベクトル検索 (/api/recommend)
+              </span>
+              <span className="text-gray-500">- 入力テキストをもとに類似度検索</span>
+            </label>
+
+            <label className="flex items-center gap-1.5 cursor-pointer text-gray-700">
+              <input
+                type="radio"
+                name="fetchMode"
+                value="direct"
+                checked={fetchMode === 'direct'}
+                onChange={() => setFetchMode('direct')}
+                className="text-blue-600 focus:ring-blue-500"
+              />
+              <span className="font-medium">
+                DB直接取得 (/api/courses)
+              </span>
+              <span className="text-gray-500">- DBから固定で5件取得</span>
+            </label>
+          </div>
+        </div>
       </header>
 
       {/* チャットメッセージ一覧 */}
@@ -465,7 +477,9 @@ export function ChatInterface() {
 
               <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-gray-200 bg-white px-4 py-3 text-sm text-gray-500">
                 <LoaderCircle size={17} className="animate-spin" />
-                回答を作成しています...
+                {fetchMode === 'recommend'
+                  ? '入力文をベクトル化して類似科目を検索中...'
+                  : 'データベースから科目を読み込み中...'}
               </div>
             </div>
           )}
@@ -484,7 +498,7 @@ export function ChatInterface() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="例：プログラミングを学びたい"
+            placeholder="例：プログラミングを学びたい / 心理学について知りたい"
             rows={1}
             disabled={loading}
             className="max-h-36 min-h-12 flex-1 resize-y rounded-xl border border-gray-300 px-4 py-3 text-sm text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-gray-100"

@@ -2,14 +2,27 @@ import { NextResponse } from 'next/server'
 import { Pool } from 'pg'
 import { GoogleGenAI } from '@google/genai'
 
-// DB 接続プール
+// PostgreSQL 接続プール (Direct Connection)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 })
 
-// Gemini クライアントの初期化
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' })
+// 評価割合テキストを { name, percentage } 配列にパースする補助関数
+function parseEvaluation(evalText: string | null): { name: string; percentage: number }[] {
+  if (!evalText) return [{ name: '総合評価', percentage: 100 }]
+
+  const matches = Array.from(evalText.matchAll(/■?\s*([^：:\d%]+)[：:]\s*(\d+)\s*%/g))
+
+  if (matches.length === 0) {
+    return [{ name: '評価割合', percentage: 100 }]
+  }
+
+  return matches.map((m) => ({
+    name: m[1].trim(),
+    percentage: parseInt(m[2], 10),
+  }))
+}
 
 export async function POST(request: Request) {
   try {
@@ -22,19 +35,37 @@ export async function POST(request: Request) {
       )
     }
 
+    const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || ''
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'GEMINI_API_KEY が環境変数に設定されていません。' },
+        { status: 500 },
+      )
+    }
+
+    const ai = new GoogleGenAI({ apiKey })
+
     // 1. 入力文を models/gemini-embedding-001 で 768次元ベクトルに変換
     const embedResponse = await ai.models.embedContent({
       model: 'models/gemini-embedding-001',
-      contents: [queryText],
+      contents: queryText,
+      config: {
+        outputDimensionality: 768, // 次元数を 768 に固定
+      },
     })
 
-    const embedding = embedResponse.embedding?.values
-    if (!embedding) {
-      throw new Error('Embedding の生成に失敗しました。')
+    // SDKのレスポンス構造に合わせて安全に抽出 (単数形または配列構造に対応)
+    const embedding =
+      embedResponse.embedding?.values ||
+      embedResponse.embeddings?.[0]?.values
+
+    console.log('Embedding vector length:', embedding ? embedding.length : 'NULL/UNDEFINED')
+
+    if (!embedding || embedding.length === 0) {
+      throw new Error('Embedding のベクトル抽出に失敗しました (undefined または 0件)。')
     }
 
     // 2. pgvector コサイン類似度検索を実行
-    // pg パッケージへは vector 配列を文字列 '[0.1, 0.2, ...]' 形式で渡します
     const vectorString = JSON.stringify(embedding)
     const limit = 5
 
@@ -62,24 +93,32 @@ export async function POST(request: Request) {
 
     const { rows } = await pool.query(sql, [vectorString, limit])
 
+    console.log('Raw similarities from DB:', rows.map(r => r.similarity))
+
     // 3. UI (Course 型) に合わせたフォーマット変換
-    const courses = rows.map((row) => ({
-      id: row.course_id || row.id,
-      name: row.title,
-      teacher: row.instructor || '未定',
-      laboratory: undefined,
-      courseType: row.course_type || '講義',
-      requirement: row.category_type || '卒業要件内',
-      credits: parseInt(row.credits || '2', 10),
-      year: parseInt(row.year_level?.replace(/[^0-9]/g, '') || '1', 10),
-      openingYear: parseInt(row.academic_year || '2026', 10),
-      semester: row.semester || '前期',
-      evaluation: row.evaluation ? [{ name: '評価割合', percentage: 100 }] : [],
-      textbook: Boolean(row.has_textbook),
-      syllabusUrl: row.url,
-      reason: 'No reason', // 現フェーズでは固定、次フェーズで Gemini 生成に置き換え
-      similarity: row.similarity, // デバッグ確認用類似度
-    }))
+    const courses = rows.map((row) => {
+      const year = parseInt(row.year_level?.replace(/[^0-9]/g, '') || '1', 10)
+      const credits = parseInt(row.credits || '2', 10)
+      const openingYear = parseInt(row.academic_year || '2026', 10)
+
+      return {
+        id: row.course_id || row.id,
+        name: row.title,
+        teacher: row.instructor || '未定',
+        laboratory: undefined,
+        courseType: row.course_type || '講義',
+        requirement: row.category_type || '卒業要件内',
+        credits: isNaN(credits) ? 2 : credits,
+        year: isNaN(year) ? 1 : year,
+        openingYear: isNaN(openingYear) ? 2026 : openingYear,
+        semester: row.semester || '前期',
+        evaluation: parseEvaluation(row.evaluation),
+        textbook: Boolean(row.has_textbook),
+        syllabusUrl: row.url,
+        reason: 'No reason', // 現段階では固定。次ステップで Gemini 理由生成に置き換え
+        similarity: typeof row.similarity === 'number' ? row.similarity : parseFloat(row.similarity),
+      }
+    })
 
     return NextResponse.json({ courses })
   } catch (err: any) {
