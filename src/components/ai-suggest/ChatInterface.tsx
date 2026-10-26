@@ -274,27 +274,29 @@ export function ChatInterface() {
     setLoading(true)
 
     try {
-      // 仮の待ち時間。後でAI APIと接続します
-      await new Promise((resolve) => setTimeout(resolve, 1000))
+      // API Route から DB の科目データを取得
+      const res = await fetch('/api/courses')
+      const data = await res.json()
 
-      const reply = createMockReply(text, faculty, department)
+      if (!res.ok) {
+        throw new Error(data.error || 'データ取得に失敗しました')
+      }
 
       const assistantMessage: Message = {
         id: nextId.current++,
         role: 'assistant',
-        content: reply.content,
-        courses: reply.courses,
+        content: `${faculty}・${department}の登録科目（データベースより取得）を表示します。`,
+        courses: data.courses,
       }
 
       setMessages((prev) => [...prev, assistantMessage])
-    } catch {
+    } catch (error) {
       setMessages((prev) => [
         ...prev,
         {
           id: nextId.current++,
           role: 'assistant',
-          content:
-            '回答の作成中にエラーが発生しました。もう一度お試しください。',
+          content: '科目データの取得中にエラーが発生しました。もう一度お試しください。',
         },
       ])
     } finally {
