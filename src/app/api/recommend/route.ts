@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server'
 import { Pool } from 'pg'
-import { GoogleGenAI } from '@google/genai'
+import { GoogleGenAI, Type } from '@google/genai'
 
-// PostgreSQL 接続プール (Direct Connection)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 })
 
-// 評価割合テキストを { name, percentage } 配列にパースする補助関数
 function parseEvaluation(evalText: string | null): { name: string; percentage: number }[] {
   if (!evalText) return [{ name: '総合評価', percentage: 100 }]
 
@@ -54,19 +52,15 @@ export async function POST(request: Request) {
       },
     })
 
-    // TypeScript の型定義エラーを回避して安全に抽出
     const resAny = embedResponse as any
     const embedding: number[] | undefined =
-      resAny.embedding?.values ||
-      embedResponse.embeddings?.[0]?.values
-
-    console.log('Embedding vector length:', embedding ? embedding.length : 'NULL/UNDEFINED')
+      resAny.embedding?.values || embedResponse.embeddings?.[0]?.values
 
     if (!embedding || embedding.length === 0) {
-      throw new Error('Embedding のベクトル抽出に失敗しました (undefined または 0件)。')
+      throw new Error('Embedding のベクトル抽出に失敗しました。')
     }
 
-    // 2. pgvector コサイン類似度検索を実行
+    // 2. pgvector コサイン類似度検索 (DBに存在するカラムのみSELECT)
     const vectorString = JSON.stringify(embedding)
     const limit = 5
 
@@ -94,21 +88,76 @@ export async function POST(request: Request) {
 
     const { rows } = await pool.query(sql, [vectorString, limit])
 
-    console.log('Raw similarities from DB:', rows.map(r => r.similarity))
+    if (rows.length === 0) {
+      return NextResponse.json({ courses: [] })
+    }
 
-    // 3. UI (Course 型) に合わせたフォーマット変換
+    // 3. gemini-3.5-flash-lite による推薦理由の一括動的生成
+    const courseSummaries = rows.map((r) => ({
+      id: r.course_id || r.id,
+      title: r.title,
+      summary: r.summary || '概要なし',
+    }))
+
+    const prompt = `
+あなたは大学の履修アドバイザーAIです。
+学生の相談内容と、抽出された科目の概要をもとに、なぜその科目が学生の要望や関心に適しているのか、各科目につき100文字程度で分かりやすく具体的なおすすめ理由を作成してください。
+
+【学生の相談内容】
+${queryText}
+
+【対象科目データ】
+${JSON.stringify(courseSummaries, null, 2)}
+`
+
+    let reasonsMap: Record<string, string> = {}
+
+    try {
+      const reasonResponse = await ai.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                reason: { type: Type.STRING },
+              },
+              required: ['id', 'reason'],
+            },
+          },
+        },
+      })
+
+      const reasonJsonText = reasonResponse.text
+      if (reasonJsonText) {
+        const parsedArray = JSON.parse(reasonJsonText) as { id: string; reason: string }[]
+        parsedArray.forEach((item) => {
+          reasonsMap[item.id] = item.reason
+        })
+      }
+    } catch (genErr) {
+      console.error('Failed to generate recommendation reasons:', genErr)
+    }
+
+    // 4. UI (Course 型) へのマッピング & 生成した理由の結合
     const courses = rows.map((row) => {
+      const courseId = row.course_id || row.id
       const year = parseInt(row.year_level?.replace(/[^0-9]/g, '') || '1', 10)
       const credits = parseInt(row.credits || '2', 10)
       const openingYear = parseInt(row.academic_year || '2026', 10)
 
       return {
-        id: row.course_id || row.id,
+        id: courseId,
         name: row.title,
         teacher: row.instructor || '未定',
         laboratory: undefined,
         courseType: row.course_type || '講義',
-        requirement: row.category_type || '卒業要件内',
+        category: '', // DB上に category カラムが無いため空文字（必要に応じて '教養' 等に調整可能）
+        requirement: row.category_type || '',
         credits: isNaN(credits) ? 2 : credits,
         year: isNaN(year) ? 1 : year,
         openingYear: isNaN(openingYear) ? 2026 : openingYear,
@@ -116,16 +165,18 @@ export async function POST(request: Request) {
         evaluation: parseEvaluation(row.evaluation),
         textbook: Boolean(row.has_textbook),
         syllabusUrl: row.url,
-        reason: 'No reason', // 現段階では固定。次ステップで Gemini 理由生成に置き換え
+        reason:
+          reasonsMap[courseId] ||
+          'あなたの相談文のテーマや意図とシラバス内容の関連度が高いため、おすすめ科目として算出されました。',
         similarity: typeof row.similarity === 'number' ? row.similarity : parseFloat(row.similarity),
       }
     })
 
     return NextResponse.json({ courses })
   } catch (err: any) {
-    console.error('Vector Search Error:', err)
+    console.error('Vector Search or Reason Gen Error:', err)
     return NextResponse.json(
-      { error: err.message || 'ベクトル類似度検索に失敗しました。' },
+      { error: err.message || '処理に失敗しました。' },
       { status: 500 },
     )
   }
