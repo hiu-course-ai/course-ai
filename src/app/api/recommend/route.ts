@@ -50,13 +50,14 @@ export async function POST(request: Request) {
       model: 'models/gemini-embedding-001',
       contents: queryText,
       config: {
-        outputDimensionality: 768, // 次元数を 768 に固定
+        outputDimensionality: 768,
       },
     })
 
-    // SDKのレスポンス構造に合わせて安全に抽出 (単数形または配列構造に対応)
-    const embedding =
-      embedResponse.embedding?.values ||
+    // TypeScript の型定義エラーを回避して安全に抽出
+    const resAny = embedResponse as any
+    const embedding: number[] | undefined =
+      resAny.embedding?.values ||
       embedResponse.embeddings?.[0]?.values
 
     console.log('Embedding vector length:', embedding ? embedding.length : 'NULL/UNDEFINED')
