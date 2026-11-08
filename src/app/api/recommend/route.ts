@@ -137,6 +137,7 @@ ${JSON.stringify(courseSummaries, null, 2)}
         const parsedArray = JSON.parse(reasonJsonText) as { id: string; reason: string }[]
         parsedArray.forEach((item) => {
           reasonsMap[item.id] = item.reason
+          //console.log("Reason for " + item.id + ": " + item.reason + "\n")
         })
       }
     } catch (genErr) {
