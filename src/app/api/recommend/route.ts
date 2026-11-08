@@ -157,8 +157,8 @@ ${JSON.stringify(courseSummaries, null, 2)}
         teacher: row.instructor || '未定',
         laboratory: undefined,
         courseType: row.course_type || '講義',
-        category: '', // DB上に category カラムが無いため空文字（必要に応じて '教養' 等に調整可能）
-        requirement: row.category_type || '',
+        category: '', // 未使用フィールド
+        category_type: row.category_type || '',
         credits: isNaN(credits) ? 2 : credits,
         year: isNaN(year) ? 1 : year,
         openingYear: isNaN(openingYear) ? 2026 : openingYear,
@@ -168,7 +168,7 @@ ${JSON.stringify(courseSummaries, null, 2)}
         syllabusUrl: row.url,
         reason:
           reasonsMap[courseId] ||
-          'あなたの相談文のテーマや意図とシラバス内容の関連度が高いため、おすすめ科目として算出されました。',
+          'あなたの相談文のテーマや意図とシラバス内容の関連度が高いため、おすすめ科目として算出されました。', // デフォルトテキスト、生成が失敗したときなど用
         similarity: typeof row.similarity === 'number' ? row.similarity : parseFloat(row.similarity),
       }
     })
