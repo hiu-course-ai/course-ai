@@ -13,7 +13,7 @@ export function Header() {
           </span>
 
           <span className="text-lg font-bold tracking-tight">
-            Kurikuru
+            HIU Course AI
           </span>
         </Link>
       </div>

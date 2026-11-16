@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Kurikuru',
+  title: 'HIU Course AI',
   description: 'AI履修アドバイザー',
 }
 
