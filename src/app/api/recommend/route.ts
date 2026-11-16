@@ -22,6 +22,37 @@ function parseEvaluation(evalText: string | null): { name: string; percentage: n
   }))
 }
 
+function formatReasonGenError(err: any): string {
+  const rawMessage = typeof err?.message === 'string' ? err.message : String(err || '不明なエラー')
+  let parsedMessage = rawMessage
+  let parsedStatus: number | string | undefined = err?.status || err?.code
+
+  // SDKのエラーメッセージ文字列内にJSONが含まれている場合はパースして詳細を取得
+  try {
+    const jsonMatch = rawMessage.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0])
+      if (parsed?.error) {
+        parsedMessage = parsed.error.message || parsedMessage
+        parsedStatus = parsed.error.code || parsedStatus
+      }
+    }
+  } catch {
+    // JSONパース失敗時は rawMessage をそのまま使用
+  }
+
+  if (parsedStatus === 503 || rawMessage.includes('503') || rawMessage.includes('UNAVAILABLE')) {
+    return `【推薦理由の生成失敗 (503)】現在AIモデルへのアクセスが集中しており一時的に利用できないため、理由を生成できませんでした。しばらく時間を置いてから再度お試しください。（詳細: ${parsedMessage}）`
+  }
+
+  if (parsedStatus === 429 || rawMessage.includes('429') || rawMessage.includes('RESOURCE_EXHAUSTED')) {
+    return `【推薦理由の生成失敗 (429)】APIのリクエスト上限に達したため、理由を生成できませんでした。時間をおいて再度お試しください。（詳細: ${parsedMessage}）`
+  }
+
+  const statusLabel = parsedStatus ? ` (${parsedStatus})` : ''
+  return `【推薦理由の生成失敗${statusLabel}】AIによる推薦理由の生成中にエラーが発生しました。（詳細: ${parsedMessage}）`
+}
+
 export async function POST(request: Request) {
   try {
     const { queryText } = await request.json()
@@ -110,7 +141,9 @@ ${queryText}
 ${JSON.stringify(courseSummaries, null, 2)}
 `
 
-    let reasonsMap: Record<string, string> = {}
+    const reasonsMap: Record<string, string> = {}
+    let fallbackReason =
+      'あなたの相談文のテーマや意図とシラバス内容の関連度が高いため、おすすめ科目として算出されました。'
 
     try {
       const reasonResponse = await ai.models.generateContent({
@@ -137,11 +170,11 @@ ${JSON.stringify(courseSummaries, null, 2)}
         const parsedArray = JSON.parse(reasonJsonText) as { id: string; reason: string }[]
         parsedArray.forEach((item) => {
           reasonsMap[item.id] = item.reason
-          //console.log("Reason for " + item.id + ": " + item.reason + "\n")
         })
       }
-    } catch (genErr) {
+    } catch (genErr: any) {
       console.error('Failed to generate recommendation reasons:', genErr)
+      fallbackReason = formatReasonGenError(genErr)
     }
 
     // 4. UI (Course 型) へのマッピング & 生成した理由の結合
@@ -166,9 +199,7 @@ ${JSON.stringify(courseSummaries, null, 2)}
         evaluation: parseEvaluation(row.evaluation),
         textbook: Boolean(row.has_textbook),
         syllabusUrl: row.url,
-        reason:
-          reasonsMap[courseId] ||
-          'あなたの相談文のテーマや意図とシラバス内容の関連度が高いため、おすすめ科目として算出されました。', // デフォルトテキスト、生成が失敗したときなど用
+        reason: reasonsMap[courseId] || fallbackReason,
         similarity: typeof row.similarity === 'number' ? row.similarity : parseFloat(row.similarity),
       }
     })
