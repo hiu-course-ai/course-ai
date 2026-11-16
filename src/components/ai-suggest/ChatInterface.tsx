@@ -27,7 +27,7 @@ type Course = {
   laboratory?: string
   courseType: string    // 授業形態 (例: 講義, 演習)
   category?: string      // 科目区分 (例: 教養, 専門)
-  requirement: string   // 履修区分 (例: 必修, 選択)
+  category_type: string   // 履修区分 (例: 必修, 選択)
   credits: number
   year: number
   openingYear: number
@@ -99,8 +99,8 @@ function CourseCard({
             <p className="text-gray-500">履修区分</p>
             <p className="mt-1 font-medium">
               {course.category
-                ? `${course.category} ${course.requirement}`
-                : course.requirement}
+                ? `${course.category} ${course.category_type}`
+                : course.category_type}
             </p>
           </div>
 

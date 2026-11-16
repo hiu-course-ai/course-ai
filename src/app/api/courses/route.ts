@@ -68,7 +68,7 @@ export async function GET() {
         teacher: row.instructor || '未定',
         laboratory: undefined,
         courseType: row.course_type || '講義',
-        requirement: row.category_type || '卒業要件内',
+        category_type: row.category_type || '卒業要件内',
         credits: isNaN(credits) ? 2 : credits,
         year: isNaN(year) ? 1 : year,
         openingYear: isNaN(openingYear) ? 2026 : openingYear,
