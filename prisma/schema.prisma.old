@@ -1,0 +1,103 @@
+datasource db {
+provider   = "postgresql"
+url        = env("DATABASE_URL")
+extensions = [pgvector(map: "vector")]
+}
+
+generator client {
+provider        = "prisma-client-js"
+previewFeatures = ["postgresqlExtensions"]
+}
+
+// ==========================================
+// 1. ユーザーモデル
+// ==========================================
+model User {
+id        String   @id @default(uuid())
+email     String?  @unique
+name      String?
+createdAt DateTime @default(now()) @map("created_at")
+updatedAt DateTime @updatedAt @map("updated_at")
+
+// リレーション
+messages     Message[]
+savedCourses SavedCourse[]
+
+@@map("users")
+}
+
+// ==========================================
+// 2. シラバス科目データ (検索・ベクトル化対象)
+// ==========================================
+model SyllabusDocument {
+id             String   @id @default(uuid())
+courseId       String   @map("course_id")       // 科目ID (例: "10010401/29107")
+academicYear   String   @map("academic_year")   // 開講年度 (例: "2026")
+curriculumYear String   @map("curriculum_year") // カリキュラム年度 / 入学年度 (例: "2026")
+department     String   // 学科名 (例: "情報言語学科")
+categoryType   String   @map("category_type")   // 履修区分 (例: "教養", "専門必修", "専門選択")
+
+// 詳細ページ取得項目
+title          String   // 科目名
+instructor     String?  // 担当教員・研究室
+yearLevel      String?  @map("year_level")      // 配当年次
+semester       String?  // 学期
+credits        String?  // 単位数
+courseType     String?  @map("course_type")     // 授業形態
+
+summary        String?  @db.Text // 授業概要
+goals          String?  @db.Text // 授業における学修の到達目標
+evaluation     String?  @db.Text // 成績評価の方法およびその基準
+hasTextbook    Boolean  @default(false) @map("has_textbook") // 教科書有無
+prerequisites  String?  @map("prerequisites") @db.Text       // 単位習得が望ましい科目
+
+combinedText   String   @map("combined_text") @db.Text // ベクトル検索・生成用の統合テキスト
+url            String   // シラバス詳細ページURL
+
+// pgvector (Gemini models/gemini-embedding-001 用 768次元)
+embedding      Unsupported("vector(768)")?
+
+createdAt      DateTime @default(now()) @map("created_at")
+updatedAt      DateTime @updatedAt @map("updated_at")
+
+// リレーション
+savedBy        SavedCourse[]
+
+// 同じ科目が異なる年度・学科・カリキュラムで開設される場合に対応した複合一意制約
+@@unique([courseId, academicYear, department, curriculumYear], name: "syllabus_unique")
+@@index([academicYear])
+@@index([curriculumYear])
+@@index([department])
+@@map("syllabus_documents")
+}
+
+// ==========================================
+// 3. チャット履歴 (1ユーザー1タイムライン)
+// ==========================================
+model Message {
+id        String   @id @default(uuid())
+userId    String   @map("user_id")
+user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+role      String   // "user" | "assistant"
+content   String   @db.Text
+createdAt DateTime @default(now()) @map("created_at")
+
+@@index([userId, createdAt])
+@@map("messages")
+}
+
+// ==========================================
+// 4. 提案・お気に入り保存科目
+// ==========================================
+model SavedCourse {
+id                 String           @id @default(uuid())
+userId             String           @map("user_id")
+user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+syllabusDocumentId String           @map("syllabus_document_id")
+syllabusDocument   SyllabusDocument @relation(fields: [syllabusDocumentId], references: [id], onDelete: Cascade)
+memo               String?          @db.Text // ユーザー任意のメモ
+createdAt          DateTime         @default(now()) @map("created_at")
+
+@@unique([userId, syllabusDocumentId])
+@@map("saved_courses")
+}
