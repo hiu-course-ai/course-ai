@@ -1,13 +1,45 @@
+'use client'
 
-export default function LoginPage() {
+import { Suspense, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
+import { createClient } from '@/utils/supabase/client'
+
+function LoginContent() {
+  const [isLoading, setIsLoading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const searchParams = useSearchParams()
+  const callbackError = searchParams.get('error')
+
+  const handleGoogleLogin = async () => {
+    setIsLoading(true)
+    setErrorMessage(null)
+
+    try {
+      const supabase = createClient()
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      })
+
+      if (error) {
+        setErrorMessage(`ログインの開始に失敗しました: ${error.message}`)
+        setIsLoading(false)
+      }
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : '予期せぬエラーが発生しました。'
+      setErrorMessage(message)
+      setIsLoading(false)
+    }
+  }
+
   return (
     <main className="min-h-screen bg-white flex items-center justify-center px-6 py-12">
-
       <div className="w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 gap-12 md:gap-16 items-center">
-
         {/* 左側：ロゴ・キャッチコピー */}
         <section className="flex flex-col items-center justify-center text-center">
-
           {/* ロゴアイコン */}
           <div className="mb-5">
             <svg
@@ -75,15 +107,11 @@ export default function LoginPage() {
           <p className="text-lg md:text-2xl text-gray-600 font-medium">
             あなたの履修を、もっとスマートに。
           </p>
-
         </section>
-
 
         {/* 右側：ログインカード */}
         <section className="w-full max-w-xl mx-auto">
-
           <div className="bg-white rounded-[28px] border border-gray-100 shadow-[0_8px_35px_rgba(30,64,120,0.12)] px-7 py-10 md:px-12 md:py-12">
-
             {/* タイトル */}
             <h2 className="text-4xl font-bold text-gray-900 mb-4">
               ログイン
@@ -96,20 +124,29 @@ export default function LoginPage() {
               あなたの履修を始めましょう。
             </p>
 
+            {/* エラー表示（認証失敗時・コールバックエラー時） */}
+            {(errorMessage || callbackError) && (
+              <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {errorMessage ||
+                  '認証処理中にエラーが発生しました。時間をおいて再度お試しください。'}
+              </div>
+            )}
 
-            {/* Googleログインボタン：UIのみ */}
+            {/* Googleログインボタン */}
             <button
               type="button"
+              onClick={handleGoogleLogin}
+              disabled={isLoading}
               className="w-full flex items-center justify-center gap-4
                 border border-gray-300 rounded-xl
                 py-4 px-5
                 text-gray-800 font-semibold text-lg
                 hover:bg-gray-50 hover:border-gray-400
                 active:scale-[0.99]
+                disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-white
                 transition-all duration-200
               "
             >
-
               {/* Googleロゴ */}
               <svg
                 width="25"
@@ -136,8 +173,11 @@ export default function LoginPage() {
                 />
               </svg>
 
-              <span>Googleアカウントでログイン</span>
-
+              <span>
+                {isLoading
+                  ? 'Google認証画面へ移動中...'
+                  : 'Googleアカウントでログイン'}
+              </span>
             </button>
 
             {/* 補足説明 */}
@@ -146,13 +186,23 @@ export default function LoginPage() {
                 Googleアカウントを使用してログインします。
               </p>
             </div>
-
           </div>
-
         </section>
-
       </div>
-
     </main>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-white flex items-center justify-center">
+          <p className="text-sm text-gray-500">読み込み中...</p>
+        </main>
+      }
+    >
+      <LoginContent />
+    </Suspense>
   )
 }
